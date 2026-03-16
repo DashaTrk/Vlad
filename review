@@ -1,0 +1,67 @@
+# Ревью CMake + C++ (core + Qt/OpenGL)
+
+## Ключевые замечания
+
+1. **Несогласованный регистр имён файлов и include-путей** (критично для Linux/macOS).
+   - В CMake: `include/core/camera2D.h`, а в коде встречаются `camera.h`, `Camera.h`, `camera2D.h`.
+   - Аналогично для `scene.h`/`Scene.h`, `itimeprovider.h`/`ITimeProvider.h`, `mesh.h`/`Mesh.h` и т.д.
+
+2. **В `add_library(core STATIC ...)` перечислены только заголовки**.
+   - Лучше сразу перечислять `.cpp` (или делать это только через `target_sources`) последовательно в одном месте.
+
+3. **Заголовки добавлены в `target_sources(... PRIVATE ...)`**.
+   - Публичные headers правильнее объявлять как `PUBLIC` (или через `FILE_SET HEADERS` в новых CMake), чтобы корректно работал экспорт/инсталляция.
+
+4. **Не хватает стандартных include-ов в некоторых header/source**.
+   - `GLProgram`: используется `std::unordered_map`, но отсутствует `<unordered_map>`.
+   - Есть места с использованием `std::runtime_error`, `std::invalid_argument` без явного `<stdexcept>`.
+
+5. **Явные синтаксические/опечатки, которые ломают сборку**:
+   - `throw::std::runtime_error(...)` (лишний `::` после `throw`).
+   - Строковый литерал с переносом в `GLShader` выглядит как некорректный (`"...\n"` оформлен небезопасно).
+   - `GLProgram::getUnigormLocation` — опечатка в имени метода (`Unigorm`).
+
+6. **Нарушение safety в исключениях**:
+   - `catch (...) { release(); throw e; }` теряет оригинальный тип исключения (rethrow by value).
+   - Лучше `throw;`.
+
+7. **Потенциальный UB/ошибка API**:
+   - `OpenGlRenderer operator=(const OpenGlRenderer&) = delete;` — неправильная сигнатура (должно быть `OpenGlRenderer& operator=(...)`).
+
+8. **Использование `const auto&` как параметра в объявлении класса (`keyInputHandler`)**.
+   - Для методов класса лучше явный тип (`QKeyEvent*`) либо шаблонный метод в header с понятной целью.
+
+9. **Логика камеры/сцены: много мест без защит от `nullptr`**.
+   - `m_camera` используется почти везде без проверки, а в конструкторе `Scene` не инициализируется сразу.
+
+10. **`wheelZoom` и размерности**:
+    - Хорошо, что есть clamp min/max, но стоит документировать, что `m_size` — это *half-height* (судя по `glm::ortho(-width, width, -height, height, ...)`).
+
+11. **Интерфейс `IRenderer::render(const Scene* scene)`**.
+    - Сырой указатель не нужен, если null не допускается. Лучше `const Scene&`.
+
+12. **`add_subdirectory(third_party/glm)` + ручной include path**.
+    - Обычно достаточно `target_link_libraries(core PUBLIC glm::glm)`. Явный include path к `third_party/glm` лишний, если target настроен корректно.
+
+## Рекомендуемые шаги (приоритет)
+
+### P0 (срочно)
+- Привести имена файлов/инклудов к единому регистру и стилю (`camera.h` vs `Camera.h`).
+- Исправить синтаксические ошибки (`throw::`, broken string literal, сигнатуры операторов).
+- Добавить недостающие include-ы стандартной библиотеки.
+
+### P1
+- Укрепить API (`const Scene&`, проверки `m_camera`, единый подход к ownership).
+- В CMake перейти на `target_sources(core PRIVATE *.cpp PUBLIC FILE_SET HEADERS ...)`.
+- Убрать дубли/лишние include directories для GLM.
+
+### P2
+- Добавить минимальные unit-тесты для:
+  - `Scene::setAspectRatio`, `wheelZoom`, `translateCamera`;
+  - корректности clamp zoom и поведения при `m_width/m_height == 0`.
+
+## Общая оценка
+
+- **Архитектурно**: хороший каркас (Camera/Scene/Renderer, отделение таймера, Qt/OpenGL слой отдельно).
+- **По качеству сборки и переносимости**: пока много острых углов; в текущем виде высок риск нестабильной сборки на CI/Linux.
+- **Оценка состояния**: **6/10** (потенциал высокий, но нужна чистка базовых технических проблем).
